@@ -1,0 +1,33 @@
+import argparse
+import pandas as pd
+
+def find_duplicate_image_paths(csv_path: str):
+    df = pd.read_csv(csv_path)
+    if 'image_path' not in df.columns:
+        raise SystemExit("CSV mist kolom 'image_path'")
+
+    counts = df['image_path'].value_counts()
+    dup_counts = counts[counts > 1]
+
+    #als geen image_path in labels meer dan 1 keer voorkomt
+    if dup_counts.empty:
+        print("Geen image_path die meer dan 1 keer voorkomt.")
+        return
+
+    print("image_path die meer dan 1 keer voorkomen (aantal):")
+    print(dup_counts.to_string())
+
+    # duplicate rows opslaan zodat we ze handmatig nogmaals kunnen reviewen
+    dup_rows = df[df['image_path'].isin(dup_counts.index)].sort_values('image_path')
+    dup_rows.to_csv('duplicate_rows.csv', index=False)
+
+    # lijst met pad opslaan 
+    dup_counts.to_frame(name='count').to_csv('duplicate_image_paths.csv', index_label='image_path')
+    print("Duplicaten opgeslagen in duplicate_rows.csv en duplicate_image_paths.csv")
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description="Zoek image_path die meer dan 1 keer voorkomen in labels.csv")
+    p.add_argument("csv", nargs="?", default="labels.csv", help="Pad naar labels.csv (standaard: labels.csv)")
+    args = p.parse_args()
+    find_duplicate_image_paths(args.csv)

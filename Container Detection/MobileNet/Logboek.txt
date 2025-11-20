@@ -1,0 +1,19 @@
+Uitleg van MobileNet stappen
+In MobileNet.ipynb begin ik met het inladen van de test data. Deze hebben we handmatig gelabeld, en we hebben zo'n 4400 gelabelde foto's. 
+Deze foto's bestaan uit afbeeldingen met container en zonder. Met container weer onderverdeeld onder met en zonder bijplaatsing, maar
+dit is voor nu irrelevant. 
+2. Afbeeldingen laden
+Je dataset staat in een map "../Images", en ik gebruik ImageDataGenerator om:
+    afbeeldingen opnieuw te schalen
+    de juiste train/validation-splits te maken
+    de afbeeldingen te preprocessen voor MobileNetV2
+    MobilenetV2 verwacht 224×224 afbeeldingen, dus ik schaal ze ook naar die grote.  
+Met imagegeneration maak je een model robuuster, omdat je verschillende hoeken, zoom etc gebruikt
+
+Na het inladen van MobileNet model zet ik trainen op uit, zodat ik daarna alleen mijn eigen toegevoegde top ga trainen
+Ik bouw bovenop Mobilenet:
+    GlobalAveragePooling (zet feature-map om naar vector)
+    Dropout (tegen overfitting) -> Na elke epoch trainen gooit hij de dropout waarde % weg van de geleerde settings
+    Dense(1, sigmoid) → binaire classificatie -> 0 of 1, wel of geen container
+
+    

@@ -3,8 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# De foto's
+# De foto's etc.
 routeeventlog/
+runs/
+datasets/
 
 # C extensions
 *.so

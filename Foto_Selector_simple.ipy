@@ -23,7 +23,7 @@ import numpy as np
 # Jasper labubu = 3
 # Marijn = 4
 # Justin = 5
-WORKER_ID = 1 # <<============= AANPASSEN NAAR WIE JE BENT ==============
+WORKER_ID = 2 # <<============= AANPASSEN NAAR WIE JE BENT ==============
 
 
 

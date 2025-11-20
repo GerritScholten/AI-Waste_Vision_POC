@@ -1,0 +1,5 @@
+names:
+  0: container
+path: c:\Users\ICT\Documents\Semester 1\Periode 2\GitCodeProj\AI-Waste_Vision_POC
+train: datasets\containers\images\train
+val: datasets\containers\images\val

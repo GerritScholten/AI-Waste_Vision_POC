@@ -1,0 +1,5 @@
+train: "C:/Users/rtvan/Documents/GitHub/AI-Waste_Vision_POC/Container Detection/MobileNet/temp_data/train"
+val: "C:/Users/rtvan/Documents/GitHub/AI-Waste_Vision_POC/Container Detection/MobileNet/temp_data/val"
+
+nc: 2
+names: ['container', 'geen_container']

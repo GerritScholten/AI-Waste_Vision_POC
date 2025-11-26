@@ -5,6 +5,8 @@ __pycache__/
 
 # De foto's
 routeeventlog/
+datasets/
+runs/
 
 # C extensions
 *.so

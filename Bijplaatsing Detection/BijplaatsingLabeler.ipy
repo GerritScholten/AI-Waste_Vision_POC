@@ -1,0 +1,355 @@
+# Linkermuisknop: klik + drag om een rectangle te tekenen. Laat los om te bevestigen.
+# s : opslaan van alle getekende boxes voor de huidige afbeelding (overschrijft eerdere boxes voor die afbeelding).
+# n : volgende afbeelding (LET OP: sla eerst op met s).
+# b : vorige afbeelding.
+# d : delete (verwijder) de laatste getekende box (nog niet opgeslagen).
+# u : undo naar laatste opgeslagen staat (herstelt laatste s-save voor deze afbeelding).
+# c : clear all boxes voor huidige afbeelding (en verwijdert uit JSON).
+# q of ESC : stoppen en annotaties opslaan.
+
+
+# Stel hier je worker id in (pas aan naar wie je bent)
+# Reinier = 0, Gerrit = 1, Lennart = 2, Jasper labubu = 3, Marijn = 4, Justin = 5
+WORKER_ID = 2         # <<< zet jouw worker-id hier
+
+
+
+WORKER_COUNT = 6      # <<< zet het aantal actieve labelers hier (default 6) NIET AANPASSEN
+
+# annotate_bboxes.ipy
+# Python/OpenCV bbox annotation tool (draw-only-rectangles)
+# - Filtert op CSV rows with label==1 (bijplaatsing)
+# - Skip images already in annotations_manual_from_notebook.json
+# - Save format matches your annotations JSON (label, bbox [x,y,w,h] in original image pixels)
+
+import csv
+import json
+from pathlib import Path
+import cv2
+import numpy as np
+from typing import List, Tuple
+import shutil
+
+
+# ---------- CONFIG ----------
+DATA_ROOT = Path("")   # base folder for images referenced in CSV (adjust if needed)
+CSV_PATH = Path("labels.csv")       # your CSV with image_path,label
+OUT_JSON = Path("annotations_manual_from_notebook.json")
+WINDOW_NAME = "BBox-Labeler"
+MAX_DISPLAY_W = 1280
+MAX_DISPLAY_H = 800
+MIN_RECT_SIZE = 5  # ignore tiny rects
+# ----------------------------
+
+# ---------- helpers ----------
+def norm_path(p: str) -> str:
+    return str(p).replace("\\", "/").strip()
+
+def load_csv_label1(csv_path: Path) -> List[str]:
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV not found: {csv_path}")
+    rows = []
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            rel = norm_path(r["image_path"])
+            try:
+                lab = int(r["label"])
+            except Exception:
+                continue
+            if lab == 1:
+                rows.append(rel)
+    return rows
+
+def load_annotations(json_path: Path) -> dict:
+    if json_path.exists():
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_annotations(ann: dict, json_path: Path):
+    """
+    Schrijft annotations naar json_path. Deze functie maakt GEEN backup.
+    De backup wordt éénmalig aangemaakt bij het starten van annotate_bboxes.
+    """
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(ann, f, indent=4)
+
+def fit_image_for_display(img_bgr, max_w=MAX_DISPLAY_W, max_h=MAX_DISPLAY_H):
+    h, w = img_bgr.shape[:2]
+    scale = min(max_w / w, max_h / h, 1.0)
+    if scale < 1.0:
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        img_disp = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    else:
+        img_disp = img_bgr.copy()
+        new_w, new_h = w, h
+    return img_disp, (w, h), (new_w, new_h), scale
+
+# ---------- Drawer class (rectangle-only) ----------
+class Drawer:
+    def __init__(self):
+        self.drawing = False
+        self.start = None
+        self.current = None
+        self.rects_display: List[Tuple[int,int,int,int]] = []  # (x1,y1,x2,y2) in display coords
+
+    def on_mouse(self, event, x, y, flags, param):
+        # left button drag to draw rectangle
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.drawing = True
+            self.start = (x, y)
+            self.current = (x, y)
+        elif event == cv2.EVENT_MOUSEMOVE and self.drawing:
+            self.current = (x, y)
+        elif event == cv2.EVENT_LBUTTONUP and self.drawing:
+            self.drawing = False
+            x1, y1 = self.start
+            x2, y2 = (x, y)
+            x1, x2 = sorted((int(x1), int(x2)))
+            y1, y2 = sorted((int(y1), int(y2)))
+            if (x2 - x1) >= MIN_RECT_SIZE and (y2 - y1) >= MIN_RECT_SIZE:
+                self.rects_display.append((x1, y1, x2, y2))
+            self.start = None
+            self.current = None
+
+    def draw(self, canvas):
+        for (x1, y1, x2, y2) in self.rects_display:
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        if self.drawing and self.start and self.current:
+            cv2.rectangle(canvas, self.start, self.current, (0, 255, 0), 1)
+
+# ---------- main ----------
+def annotate_bboxes(
+    data_root: Path = DATA_ROOT,
+    csv_path: Path = CSV_PATH,
+    out_json: Path = OUT_JSON,
+    start_index: int = 0,
+    max_images: int = None
+):
+    data_root = Path(data_root)
+    csv_path = Path(csv_path)
+    out_json = Path(out_json)
+
+    rels = load_csv_label1(csv_path)
+    if not rels:
+        print("No images with label==1 found in CSV.")
+        return
+
+    # --- make a single backup at start (only if original exists) ---
+    backup_path = out_json.with_suffix(out_json.suffix + ".bak")
+    created_backup = False
+    try:
+        if out_json.exists():
+            try:
+                shutil.copy2(out_json, backup_path)
+                created_backup = True
+                print(f"Backup created: {backup_path}")
+            except Exception as e:
+                print("Warning: failed to create backup:", e)
+        else:
+            created_backup = False
+
+        annotations = load_annotations(out_json)
+
+        # build full list of candidate images (skip those already annotated)
+        full_filtered = []
+        for rel in rels:
+            rel_key = rel.replace("\\", "/")
+            if rel_key in annotations:
+                # skip
+                continue
+            # resolve absolute path
+            p = Path(rel)
+            if not p.is_absolute():
+                p_abs = data_root / rel
+            else:
+                p_abs = p
+            if not p_abs.exists():
+                print("WARN: image not found, skipping:", p_abs)
+                continue
+            full_filtered.append((rel_key, p_abs))
+
+        if not full_filtered:
+            print("No new images to annotate (all present in output JSON).")
+            return
+
+        # deterministic assignment: each worker gets items where index % WORKER_COUNT == WORKER_ID
+        if WORKER_COUNT <= 0:
+            raise ValueError("WORKER_COUNT must be > 0")
+        worker_filtered = [
+            item for i, item in enumerate(full_filtered) if (i % WORKER_COUNT) == WORKER_ID
+        ]
+
+        print(f"Total new images: {len(full_filtered)}. Assigned to worker {WORKER_ID}: {len(worker_filtered)} images.")
+
+        if not worker_filtered:
+            print(f"No images assigned to worker {WORKER_ID}. Nothing to do.")
+            return
+
+        # apply optional max_images cap (on the worker slice)
+        if max_images:
+            worker_filtered = worker_filtered[:max_images]
+
+        # continue using 'filtered' variable in the rest of your code (rename for compatibility)
+        filtered = worker_filtered
+
+        # rest of your code is unchanged: prepare window and drawer, loop over filtered...
+        drawer = Drawer()
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WINDOW_NAME, MAX_DISPLAY_W, MAX_DISPLAY_H)
+        cv2.setMouseCallback(WINDOW_NAME, drawer.on_mouse)
+
+        idx = max(0, start_index)
+        history = []  # list of (idx, saved_rects_display)
+        saved_flag = False
+
+        while 0 <= idx < len(filtered):
+            rel_key, abs_path = filtered[idx]
+            # load original image (handles unicode paths)
+            img_bgr = cv2.imdecode(np.fromfile(str(abs_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+            if img_bgr is None:
+                print("Failed to load image:", abs_path)
+                idx += 1
+                continue
+
+            img_disp, (orig_w, orig_h), (disp_w, disp_h), scale = fit_image_for_display(img_bgr)
+            # scale factors to convert between display and original coords
+            scale_x = orig_w / disp_w
+            scale_y = orig_h / disp_h
+
+            # reset drawer rects; if this rel_key existed in annotations we would have skipped it earlier
+            drawer.rects_display = []
+
+            saved_flag = False
+            while True:
+                canvas = img_disp.copy()
+                # UI text
+                lines = [
+                    f"[{idx+1}/{len(filtered)}] {rel_key}",
+                    "LMB: draw rect   d: delete last rect   c: clear rects",
+                    "s: save    n: next    b: prev    u: undo last save",
+                    "q or ESC: quit"
+                ]
+                y0 = 20
+                for i, line in enumerate(lines):
+                    cv2.putText(canvas, line, (8, y0 + i*20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220,220,220), 1, cv2.LINE_AA)
+
+                drawer.draw(canvas)
+                cv2.imshow(WINDOW_NAME, canvas)
+                key = cv2.waitKey(20) & 0xFF
+                if key == 255:
+                    continue
+
+                # Quit
+                if key in (ord("q"), 27):
+                    # save before exit if user saved_flag True (we keep last saved state)
+                    if saved_flag:
+                        save_annotations(annotations, out_json)
+                    print("Quitting, annotations saved (if any).")
+                    cv2.destroyAllWindows()
+                    return  # finally block will run to cleanup backup
+
+# Save current rects for this image
+                if key == ord("s"):
+                    out_list = []
+                    for (x1, y1, x2, y2) in drawer.rects_display:
+                        ox = int(round(x1 * scale_x))
+                        oy = int(round(y1 * scale_y))
+                        ow = int(round((x2 - x1) * scale_x))
+                        oh = int(round((y2 - y1) * scale_y))
+                        ox = max(0, min(orig_w-1, ox))
+                        oy = max(0, min(orig_h-1, oy))
+                        ow = max(1, min(orig_w-ox, ow))
+                        oh = max(1, min(orig_h-oy, oh))
+                        out_list.append({"label": "bijplaatsing", "bbox": [ox, oy, ow, oh]})
+                    annotations[rel_key] = out_list
+                    save_annotations(annotations, out_json)
+                    history.append((idx, list(drawer.rects_display)))
+                    saved_flag = True
+                    print(f"Saved {len(out_list)} boxes for {rel_key}")
+                    continue
+
+                # Next
+                if key == ord("n"):
+                    if not saved_flag:
+                        print("Warning: not saved. Press 's' to save current boxes before next.")
+                    else:
+                        idx += 1
+                        break
+
+                # Prev
+                if key == ord("b"):
+                    idx = max(0, idx - 1)
+                    break
+
+                # Delete last rect (display coords)
+                if key == ord("d"):
+                    if drawer.rects_display:
+                        removed = drawer.rects_display.pop()
+                        print("Deleted last rect (display coords):", removed)
+                    else:
+                        print("No rect to delete.")
+
+                # Clear all rects (and delete saved annotation if present)
+                if key == ord("c"):
+                    drawer.rects_display = []
+                    if rel_key in annotations:
+                        del annotations[rel_key]
+                        save_annotations(annotations, out_json)
+                    saved_flag = False
+                    print("Cleared current rects and removed saved annotation (if existed).")
+
+                # Undo last save for this image (restore last saved rects_display from history)
+                if key == ord("u"):
+                    # search backwards in history for this idx
+                    for h in range(len(history)-1, -1, -1):
+                        hidx, hrects = history[h]
+                        if hidx == idx:
+                            drawer.rects_display = list(hrects)
+                            # also restore annotations dict to these rects
+                            out_list = []
+                            for (x1, y1, x2, y2) in drawer.rects_display:
+                                ox = int(round(x1 * scale_x))
+                                oy = int(round(y1 * scale_y))
+                                ow = int(round((x2 - x1) * scale_x))
+                                oh = int(round((y2 - y1) * scale_y))
+                                out_list.append({"label": "bijplaatsing", "bbox": [ox, oy, ow, oh]})
+                            annotations[rel_key] = out_list
+                            save_annotations(annotations, out_json)
+                            saved_flag = True
+                            print("Reverted to last saved state for this image.")
+                            break
+                    else:
+                        print("No previous saved state for this image.")
+
+        # end while
+        cv2.destroyAllWindows()
+        save_annotations(annotations, out_json)
+        print("Finished. Annotations saved to", out_json)
+
+    finally:
+        # cleanup: remove backup (only the .bak we created for this session)
+        try:
+            if created_backup and backup_path.exists():
+                backup_path.unlink()  # remove the .bak file
+                print(f"Removed temporary backup: {backup_path}")
+        except Exception as e:
+            print("Warning: failed to remove backup:", e)
+
+
+# ---------- run ----------
+if __name__ == "__main__":
+    annotate_bboxes()
+
+
+
+# Linkermuisknop: klik + drag om een rectangle te tekenen. Laat los om te bevestigen.
+# s : opslaan van alle getekende boxes voor de huidige afbeelding (overschrijft eerdere boxes voor die afbeelding).
+# n : volgende afbeelding (LET OP: sla eerst op met s).
+# b : vorige afbeelding.
+# d : delete (verwijder) de laatste getekende box (nog niet opgeslagen).
+# u : undo naar laatste opgeslagen staat (herstelt laatste s-save voor deze afbeelding).
+# c : clear all boxes voor huidige afbeelding (en verwijdert uit JSON).
+# q of ESC : stoppen en annotaties opslaan.

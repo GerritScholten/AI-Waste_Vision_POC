@@ -5,6 +5,9 @@ __pycache__/
 
 # De foto's
 routeeventlog/
+Bijplaatsing Detection/dataset/
+
+
 
 # C extensions
 *.so

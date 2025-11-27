@@ -1,0 +1,268 @@
+import argparse
+import csv
+import random
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+# ===== CONFIGURATION (pas hier aan) =====
+# Worker-verdeling: zet WORKER_ID op -1 om alle afbeeldingen te labelen (geen verdeling)
+# Gebruik samen met NUM_WORKERS om dataset in delen te splitsen
+
+
+
+
+
+
+
+# DIT BEPAALT WELK DEEL VAN DE SET JE KRIJGT OM TE LABELEN
+# Reinier = WORKER_ID 0
+# Gerrit = 1
+# Lennart = 2
+# Jasper labubu = 3
+# Marijn = 4
+# Justin = 5
+WORKER_ID = 1 # <<============= AANPASSEN NAAR WIE JE BENT ==============
+
+
+
+
+
+
+
+
+
+
+
+
+RANDOM_SEED = 42
+# SAMPLE_SIZE = 0 betekent: geen sample, gebruik alle afbeeldingen
+SAMPLE_SIZE = 0
+
+CSV_PATH = Path("labels.csv")
+
+NUM_WORKERS = 6 # <<<<===== NIET AANPASSEN =====
+
+# Scherm- en resize-waarden
+MAX_WIDTH = 1280
+MAX_HEIGHT = 800
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 800
+# ========================================
+
+# alle jpg images uit de map halen
+def collect_images(root):
+    exts = {".jpg", ".jpeg", ".JPG", ".JPEG"}
+    return [p for p in root.rglob("*") if p.suffix in exts]
+
+
+# al gelabelde afbeeldingen uit csv halen
+def load_labeled_set():
+    if not CSV_PATH.exists():
+        return set()
+
+    labeled = set()
+    with open(CSV_PATH, "r") as f:
+        reader = csv.reader(f)
+        next(reader, None)  # sla header over
+        for row in reader:
+            if row:
+                labeled.add(row[0])
+
+    return labeled
+
+
+# afbeelding pad + label --> CSV
+def append_label(image_path, label):
+    # als csv niet bestaat, maak aan met header
+    if not CSV_PATH.exists():
+        with open(CSV_PATH, "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(["image_path", "label"])
+
+    # Voeg de labeling toe
+    with open(CSV_PATH, "a") as f:
+        writer = csv.writer(f)
+        writer.writerow([image_path, label])
+
+
+
+def remove_label(image_path):
+    if not CSV_PATH.exists():
+        return
+
+    rows = []
+    with open(CSV_PATH, "r") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        for row in reader:
+            if not row:
+                continue
+            # behoud alle rijen die niet overeenkomen met image_path
+            if row[0] != image_path:
+                rows.append(row)
+
+    # schrijf header en gefilterde rijen terug
+    with open(CSV_PATH, "w") as f:
+        writer = csv.writer(f)
+        if header:
+            writer.writerow(header)
+        writer.writerows(rows)
+
+
+# tekst met instructies onder afbeelding
+def show_image_with_text(img, lines):
+    overlay = img.copy()
+    h, w = img.shape[:2]
+    y = h - 10
+    
+    for i, line in enumerate(reversed(lines)):
+        cv2.putText(
+            overlay,
+            line,
+            (10, y - i * 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (50, 50, 255),
+            1,
+            cv2.LINE_AA,
+        )
+    
+    cv2.addWeighted(overlay, 1.0, img, 0.0, 0, img)
+
+
+# afbeelding laden en op scherm passen
+def load_and_fit(path, max_w=MAX_WIDTH, max_h=MAX_HEIGHT):
+    img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    
+    h, w = img.shape[:2]
+    scale = min(max_w / w, max_h / h, 1.0)
+    
+    if scale < 1.0:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    
+    return img
+
+
+def main(root_dir, sample_size, shuffle_seed, worker_id, num_workers):
+    
+    all_images = collect_images(root_dir)
+    
+    rng = random.Random(shuffle_seed)
+    rng.shuffle(all_images)
+    
+    # Worker-verdeling: verdeel alle_images in segmenten
+    if worker_id >= 0 and num_workers > 0:
+        segment_size = len(all_images) // num_workers
+        start = worker_id * segment_size
+
+        # laatste workder krijgt resterende images 
+        if worker_id == num_workers - 1:
+            end = len(all_images)
+        else:
+            end = start + segment_size
+        all_images = all_images[start:end]
+        print(f"Worker {worker_id + 1}/{num_workers}: {len(all_images)} afbeeldingen totaal")
+    
+    # eventueel een sample nemen uit je test set
+    if sample_size and sample_size > 0:
+        all_images = all_images[:sample_size]
+    
+    # filteren op niet gelabelde images
+    labeled_paths = load_labeled_set()
+    pool = [p for p in all_images if str(p) not in labeled_paths]
+    
+    if not pool:
+        print("Geen nieuwe afbeeldingen om te labelen.")
+        return
+    
+    # window setup
+    cv2.namedWindow("Labeler", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Labeler", WINDOW_WIDTH, WINDOW_HEIGHT)
+    
+    index = 0
+    history = []
+    
+    while 0 <= index < len(pool):
+        img_path = pool[index]
+        img = load_and_fit(img_path)
+        
+        # === STAP 1: Container aanwezig op foto? ===
+        img_display = img.copy()
+        show_image_with_text(img_display, [
+            f"[{index + 1}/{len(pool)}] {img_path.name}",
+            "Container aanwezig?  1=Ja  0=Nee  b=Terug  q=Stop"
+        ])
+        cv2.imshow("Labeler", img_display)
+        
+        key = cv2.waitKey(0) & 0xFF
+        
+        if key in (ord("q"), 27):  # q of ESC
+            cv2.destroyAllWindows()
+            print("Afgesloten.")
+            return
+        
+        if key == ord("b"):  # undo / terug
+            if history:
+                # haal laatste gelabelde index en verwijder dat label uit de CSV --> undo 
+                last_index = history.pop()
+                try:
+                    remove_label(str(pool[last_index]))
+                except Exception:
+                    # als iets misgaat bij het verwijderen, ga toch terug
+                    pass
+                index = last_index
+            else:
+                index = max(0, index - 1)
+            continue
+        
+        if key == ord("0"):  # geen container
+            append_label(str(img_path), -1)
+            print(f"Geen container: {img_path.name}")
+            history.append(index)
+            index += 1
+            continue
+        
+        if key == ord("1"):  # Container aanwezig → stap 2
+            # === STAP 2: Bijplaatsing? ===
+            img_display = img.copy()
+            show_image_with_text(img_display, [
+                f"[{index + 1}/{len(pool)}] {img_path.name}",
+                "Bijplaatsing?  1=Ja  0=Nee  b=Terug  q=Stop"
+            ])
+            cv2.imshow("Labeler", img_display)
+            
+            key2 = cv2.waitKey(0) & 0xFF
+            
+            if key2 in (ord("q"), 27):  # q of ESC
+                cv2.destroyAllWindows()
+                print("Afgesloten.")
+                return
+            
+            if key2 == ord("b"):  # Terug naar stap 1
+                continue
+            
+            if key2 in (ord("0"), ord("1")):  # Label kiezen
+                label = 1 if key2 == ord("1") else 0
+                append_label(str(img_path), label)
+                print(f"Opgeslagen als label={label}: {img_path.name}")
+                history.append(index)
+                index += 1
+    
+    cv2.destroyAllWindows()
+    print("Klaar!")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Afbeeldingen labelen")
+    parser.add_argument("--root", type=Path, default=Path("routeeventlog"), help="Map met afbeeldingen")
+    parser.add_argument("--csv", type=Path, default=Path("labels.csv"), help="CSV-bestand")
+    parser.add_argument("--sample", type=int, default=SAMPLE_SIZE, help="Aantal afbeeldingen (0=allemaal)")
+    parser.add_argument("--seed", type=int, default=RANDOM_SEED, help="Random seed")
+    parser.add_argument("--worker-id", type=int, default=WORKER_ID, help="Worker ID (0-geindexeerd), -1 = geen verdeling")
+    parser.add_argument("--num-workers", type=int, default=NUM_WORKERS, help="Totaal aantal workers")
+    
+    args = parser.parse_args()
+
+    main(args.root, args.sample, args.seed, args.worker_id, args.num_workers)

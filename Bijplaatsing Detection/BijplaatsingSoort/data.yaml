@@ -1,0 +1,13 @@
+path: C:/Users/rtvan/Documents/GitHub/AI-Waste_Vision_POC/Bijplaatsing Detection/object_dataset
+
+train: images
+val: images
+
+names:
+  0: Container
+  1: GFT
+  2: Glas
+  3: Papier
+  4: Plastic
+  5: Rest
+  6: Voertuig

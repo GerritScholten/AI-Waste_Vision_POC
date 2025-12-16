@@ -1,7 +1,8 @@
-path: project-1-at-2025-12-09-11-35-f5f82d17
+path: MergedData
 
-train: images
-val: images
+train: train
+val: val
+test: test
 
 names:
   0: Container

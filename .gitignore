@@ -7,6 +7,9 @@ __pycache__/
 routeeventlog/
 runs/
 datasets/
+Bijplaatsing_Classifier/
+BijPlaClaBak/
+mijn400fotos/
 
 # C extensions
 *.so
